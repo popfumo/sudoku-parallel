@@ -1,10 +1,10 @@
-CC = gcc -pedantic -Wall
-FLAGS = -I/opt/X11/include -Ofast -march=native -funroll-loops -ftree-vectorize -fopt-info-vec-optimized -fopenmp
+CC = gcc -pedantic -Wall -fopenmp
+FLAGS = -I/opt/X11/include 
 UNOPTIMIZED_FLAGS = -I/opt/X11/include
 DEBUG = -g
 C_LINK_OPTIONS = -L/opt/X11/lib -lX11 -lm
 
-EXEC_NAME = sodoku
+EXEC_NAME = base_solver
 
 all: $(EXEC_NAME)
 
