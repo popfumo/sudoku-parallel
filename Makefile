@@ -1,10 +1,11 @@
 CC = gcc -pedantic -Wall -fopenmp
-FLAGS = -I/opt/X11/include 
+FLAGS = -I/opt/X11/include -Ofast -march=native -funroll-loops -ftree-vectorize -fopt-info-vec-optimized -fopenmp
 UNOPTIMIZED_FLAGS = -I/opt/X11/include
+PROFILE = -pg
 DEBUG = -g
 C_LINK_OPTIONS = -L/opt/X11/lib -lX11 -lm
 
-EXEC_NAME = base_solver
+EXEC_NAME = parallel_solver
 
 all: $(EXEC_NAME)
 

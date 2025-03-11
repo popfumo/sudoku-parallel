@@ -14,7 +14,6 @@ typedef struct {
     unsigned char **board;
 } board_t;
 
-// FIXME: Maybe SoA instead of AoS? 
 typedef struct {
     unsigned char x; // row
     unsigned char y; // column
@@ -139,6 +138,7 @@ bool check_column(unsigned char **board, unsigned char row, unsigned char column
     }
     return true;
 }
+
 bool check_square(unsigned char **board, unsigned char row, unsigned char column, unsigned char value, unsigned char base) {
     unsigned char start_row = row - row % base;
     unsigned char start_column = column - column % base;
@@ -168,30 +168,96 @@ bool validate(unsigned char **board, unsigned char row, unsigned char column, un
     return true;
 }
 
+// Modified solver to be parallelized with OpenMP tasks
 bool solver(ua_t *ua, board_t *board, short int zeroes) {
+    // Check if solution is already found
+    if(global_flag) {
+        return false;
+    }
+    
     if(zeroes == 0) {
         global_flag = true;
         return true;
     }
+    
     ua_t index = ua[zeroes-1];
-    for(int i = 1; i <= board->sidelength; i++) {
-        board->board[index.x][index.y] = i;
-
-        
-        if(validate(board->board, index.x, index.y, i, board->base, board->sidelength)) {
-            if(solver(ua, board, zeroes - 1)) {
-                return true;
+    
+    // Parallelize the search through possible values
+    // Only create tasks for the first few levels of recursion to avoid task overhead
+    if(zeroes > board->n_zeros - 2) {
+        #pragma omp taskgroup
+        {
+            for(int i = 1; i <= board->sidelength; i++) {
+                if(global_flag) continue; // Early termination if solution found
+                
+                // Create a copy of the board for each task
+                unsigned char **board_copy = malloc(board->sidelength * sizeof(unsigned char *));
+                for(int j = 0; j < board->sidelength; j++) {
+                    board_copy[j] = malloc(board->sidelength * sizeof(unsigned char));
+                    memcpy(board_copy[j], board->board[j], board->sidelength * sizeof(unsigned char));
+                }
+                
+                board_t board_task = {
+                    .base = board->base,
+                    .sidelength = board->sidelength,
+                    .n_zeros = board->n_zeros,
+                    .N = board->N,
+                    .board = board_copy
+                };
+                
+                board_copy[index.x][index.y] = i;
+                
+                if(validate(board_copy, index.x, index.y, i, board->base, board->sidelength)) {
+                    #pragma omp task shared(global_flag)
+                    {
+                        if(solver(ua, &board_task, zeroes - 1)) {
+                            // Copy solution back to original board
+                            if(global_flag) {
+                                #pragma omp critical
+                                {
+                                    for(int j = 0; j < board->sidelength; j++) {
+                                        memcpy(board->board[j], board_task.board[j], board->sidelength * sizeof(unsigned char));
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Free task-local memory
+                        for(int j = 0; j < board_task.sidelength; j++) {
+                            free(board_task.board[j]);
+                        }
+                        free(board_task.board);
+                    }
+                } else {
+                    // Free memory if we don't create a task
+                    for(int j = 0; j < board->sidelength; j++) {
+                        free(board_copy[j]);
+                    }
+                    free(board_copy);
+                }
             }
         }
-        
-
+    } else {
+        // Sequential solving for deeper recursion levels
+        for(int i = 1; i <= board->sidelength; i++) {
+            if(global_flag) break; // Early termination if solution found
+            
+            board->board[index.x][index.y] = i;
+            if(validate(board->board, index.x, index.y, i, board->base, board->sidelength)) {
+                if(solver(ua, board, zeroes - 1)) {
+                    return true;
+                }
+            }
+        }
+        board->board[index.x][index.y] = 0;
     }
-    board->board[index.x][index.y] = 0;
-    return false;
+    
+    return global_flag;
 }
 
-int main(int argc, char *argv[]) {
+// Assuming print_board and board_init functions exist elsewhere
 
+int main(int argc, char *argv[]) {
     if(argc != 3) {
         printf("Usage: <board_size> <nthreads>\n");
         printf("board_size: 25, 36, 64\n");
@@ -200,16 +266,22 @@ int main(int argc, char *argv[]) {
     int board_size = atoi(argv[1]);
     int nthreads = atoi(argv[2]);
     omp_set_num_threads(nthreads);
-
+    
     board_t *board = malloc(sizeof(board_t));
     ua_t *ua = board_init(board_size, board);
     if (board == NULL) {
         printf("Error initializing board\n");
         return 1;
     }
+    
     printf("no zeros: %d\n", board->n_zeros);
     double time = omp_get_wtime();
     print_board(board, board->sidelength);
+    
+    // Initialize global flag
+    global_flag = false;
+    
+    // Parallel region for solver
     #pragma omp parallel num_threads(nthreads)
     {
         #pragma omp single
@@ -227,11 +299,11 @@ int main(int argc, char *argv[]) {
     printf("Solved board\n");
     print_board(board, board->sidelength);
     printf("Time taken: %f seconds \n", time);
+    
     free(ua);
     for(int i = 0; i < board->sidelength; i++) {
         free(board->board[i]);
     }
     free(board->board);
-
     return 0;
 }
