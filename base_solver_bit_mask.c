@@ -4,14 +4,13 @@
 #include <math.h>
 #include <stdbool.h>
 #include <omp.h>
+#include <stdint.h>  
 #include "verify.h"
 #include "solver.h"
-volatile bool global_flag = false;
-
 
 typedef struct {
-    unsigned char x; // row
-    unsigned char y; // column
+    unsigned char x; 
+    unsigned char y; 
 } ua_t; 
 
 void print_board(board_t *board_data, int sidelength) {
@@ -46,6 +45,30 @@ void print_ua(ua_t *ua, int n_zeros) {
     }
 }
 
+void bitmask_init(board_t *board) {
+    unsigned char base = board->base;
+    unsigned char sidelength = board->sidelength;
+    board->rbits = calloc(sidelength, sizeof(uint64_t));
+    board->cbits = calloc(sidelength, sizeof(uint64_t));
+    board->bbits = calloc(sidelength, sizeof(uint64_t));
+    for(int i = 0; i < sidelength; i++) {
+        for(int j = 0; j < sidelength; j++) {
+            unsigned char curr_val = board->board[i][j];
+            // Checking if the value is not 0, if it is not 0, update the bitmasks
+            if(curr_val != 0) {
+                // Block index calculation
+                unsigned char block_idx = (i / base) * base + (j / base);
+                // Handwavy, setting the bits for the row and column block
+                // Example: we are at the first row (i=0) and curr_val = 3
+                // then we need to set that bit for that i by applying an OR operation
+                // to the current i with a 1 that is shifted 3 bits to the left 1 << 3 = 1000
+                board->rbits[i] |= ((uint64_t)1 << curr_val);
+                board->cbits[j] |= ((uint64_t)1 << curr_val);
+                board->bbits[block_idx] |= ((uint64_t)1 << curr_val);
+            }
+        }
+    }
+}
 
 ua_t *board_init(int board_size, board_t *board) {
     FILE *file = NULL;
@@ -102,7 +125,7 @@ ua_t *board_init(int board_size, board_t *board) {
             }
         }
     }
-    
+    bitmask_init(board);
     fclose(file); 
     return ua;
    
@@ -110,90 +133,68 @@ ua_t *board_init(int board_size, board_t *board) {
 
 }
 
-bool check_row(unsigned char **board, unsigned char row, unsigned char column, unsigned char value, unsigned char sidelength) {
-
-    for(int i = 0; i < sidelength; i++) {
-        if(i == column) {
-            continue;
-        }
-        if(board[row][i] == value) {
-            return false;
-        }
+void bit_update(board_t *board, int row, int column, int value, bool add) {
+    int block_idx = (row / board->base) * board->base + (column / board->base);
+    uint64_t mask = ((uint64_t)1 << value);
+    if(add) {
+        // Add the value to the bitmasks using the OR operator
+        board->rbits[row] |= mask;
+        board->cbits[column] |= mask;
+        board->bbits[block_idx] |= mask;
+    } else {
+        // Remove the value from the bitmasks using the NOT operator
+        // Example: we have a row bitmask of 1111 and we want to remove the value 2
+        // we need to create a mask of 1011 and apply an AND operation to the row bitmask
+        board->rbits[row] &= ~mask;
+        board->cbits[column] &= ~mask;
+        board->bbits[block_idx] &= ~mask;
     }
-    return true;
-}
-bool check_column(unsigned char **board, unsigned char row, unsigned char column, unsigned char value, unsigned char sidelength) {
-    for(int i = 0; i < sidelength; i++) {
-        if(i == row) {
-            continue;
-        }
-        if(board[i][column] == value) {
-            return false;
-        }
-    }
-    return true;
-}
-bool check_square(unsigned char **board, unsigned char row, unsigned char column, unsigned char value, unsigned char base) {
-    unsigned char start_row = row - row % base;
-    unsigned char start_column = column - column % base;
-    for(int i = 0; i < base; i++) {
-        for(int j = 0; j < base; j++) {
-            if (i + start_row == row && j + start_column == column) {
-                continue;
-            }
-            if(board[i + start_row][j + start_column] == value) {
-                return false;
-            }
-        }
-    }
-    return true;
 }
 
-bool validate(unsigned char **board, unsigned char row, unsigned char column, unsigned char value, unsigned char base, unsigned char sidelength) {
-    if(check_row(board, row, column, value, sidelength) == false) {
-        return false;
-    }
-    if(check_column(board, row, column, value, sidelength) == false) {
-        return false;
-    }
-    if(check_square(board, row, column, value, base) == false) {
-        return false;
-    }
-    return true;
+bool validate(board_t *board, int row, int column, int value) {
+    
+    // can't this be done by row + column / base?
+    int block_idx = (row / board->base) * board->base + (column / board->base);
+    uint64_t mask = ((uint64_t)1 << value);
+    return !(
+        (board->rbits[row] & mask) || 
+        (board->cbits[column] & mask) || 
+        (board->bbits[block_idx] & mask)
+    );
 }
 
 bool solver(ua_t *ua, board_t *board, short int zeroes) {
     if(zeroes == 0) {
-        global_flag = true;
         return true;
     }
     ua_t index = ua[zeroes-1];
+    int row = index.x;
+    int column = index.y;
     for(int i = 1; i <= board->sidelength; i++) {
-        board->board[index.x][index.y] = i;
-
-        
-        if(validate(board->board, index.x, index.y, i, board->base, board->sidelength)) {
+        if(validate(board, row, column, i)) {
+            // Place value after validation instead 
+            board->board[index.x][index.y] = i;
+            bit_update(board, row, column, i, true);
             if(solver(ua, board, zeroes - 1)) {
                 return true;
             }
+            board->board[index.x][index.y] = 0;
+            bit_update(board, row, column, i, false);
         }
         
 
     }
-    board->board[index.x][index.y] = 0;
     return false;
 }
 
 int main(int argc, char *argv[]) {
 
     if(argc != 3) {
-        printf("Usage: <board_size> <nthreads>\n");
+        printf("Usage: <board_size>\n");
         printf("board_size: 25, 36, 64\n");
         return 1;
     }
     int board_size = atoi(argv[1]);
-    int nthreads = atoi(argv[2]);
-    omp_set_num_threads(nthreads);
 
     board_t *board = malloc(sizeof(board_t));
     ua_t *ua = board_init(board_size, board);
@@ -207,6 +208,7 @@ int main(int argc, char *argv[]) {
 
     solver(ua, board, board->n_zeros);
 
+    
     time = omp_get_wtime() - time;
     for(int i = 0; i < board->sidelength; i++) {
         printf("_____");
@@ -222,11 +224,14 @@ int main(int argc, char *argv[]) {
     else {
         printf("Valid solution\n");
     }
+    free(board->rbits);
+    free(board->cbits);
+    free(board->bbits);
     free(ua);
     for(int i = 0; i < board->sidelength; i++) {
         free(board->board[i]);
     }
     free(board->board);
-
+    free(board);
     return 0;
 }
