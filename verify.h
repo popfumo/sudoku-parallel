@@ -3,4 +3,4 @@
 #include <omp.h>
 #include "solver.h"
 
-bool verify(board_t *board);
+bool verify(board_t board);

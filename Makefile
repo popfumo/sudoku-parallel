@@ -1,10 +1,9 @@
 CC = gcc -pedantic -Wall -fopenmp
-FLAGS = -Ofast -march=native -funroll-loops -ftree-vectorize -fopt-info-vec-optimized -fopenmp
+FLAGS = -Ofast -march=native -funroll-loops -ftree-vectorize -fopt-info-vec-optimized -fopenmp 
 PROFILE = -pg
 DEBUG = -g
-C_LINK_OPTIONS = -L/opt/X11/lib -lX11 -lm
 
-EXEC_NAME = base_solver_bit_mask
+EXEC_NAME = solver
 
 all: $(EXEC_NAME)
 
@@ -17,16 +16,19 @@ $(EXEC_NAME): $(EXEC_NAME).o verify.o
 $(EXEC_NAME)_debug: $(EXEC_NAME).c verify.c
 	$(CC) $(FLAGS) $(DEBUG) -o $@ $^ 
 
+$(EXEC_NAME)_profile: $(EXEC_NAME).c verify.c
+	$(CC) $(FLAGS) $(PROFILE) -o $@ $^ 
+
 run: $(EXEC_NAME)
 	./$(EXEC_NAME)
 
-valgrind: $(EXEC_NAME)_debug
-	valgrind --leak-check=full ./$
+valgrind: $(EXEC_NAME)_debug verify.c
+	valgrind --leak-check=full ./$(EXEC_NAME) 64 4 100
 
-cache: $(EXEC_NAME)
-	valgrind --tool=cachegrind --branch-sim=yes ./$
+cache: $(EXEC_NAME) verify.c
+	valgrind --tool=cachegrind --branch-sim=yes ./$(EXEC_NAME) 64 4 100
 
 clean:
-	rm -f $(EXEC_NAME) $(EXEC_NAME)_debug *.o 
+	rm -f $(EXEC_NAME) $(EXEC_NAME)_debug $(EXEC_NAME)_profile *.o 
 
 .PHONY: all clean run valgrind cache
